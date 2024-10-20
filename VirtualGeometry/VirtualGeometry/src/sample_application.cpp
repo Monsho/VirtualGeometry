@@ -286,7 +286,7 @@ bool SampleApplication::Initialize()
 			{
 				data->groupSphereCenter = DirectX::XMFLOAT3(it->second.groupBounds.sphereCenter.x, it->second.groupBounds.sphereCenter.y, it->second.groupBounds.sphereCenter.z);
 				data->parentSphereCenter = DirectX::XMFLOAT3(it->second.parentBounds.sphereCenter.x, it->second.parentBounds.sphereCenter.y, it->second.parentBounds.sphereCenter.z);
-				data->groupError = it->second.meshletError;
+				data->groupError = it->second.groupError;
 				data->parentError = it->second.parentError;
 				data->indexCount = (UINT)it->second.indices.size();
 				data->indexOffset = (UINT)it->second.indexBufferOffset;
@@ -579,7 +579,7 @@ void SampleApplication::EnumerateVisibleMeshlets(const MyMesh* InMyMesh, const D
 	};
 	auto IsMeshletVisible = [&](const MyMeshlet* InMyMeshlet)
 	{
-		float ownError = InMyMeshlet->meshletError * maxScale;
+		float ownError = InMyMeshlet->groupError * maxScale;
 		DirectX::XMFLOAT3 ownCenter(InMyMeshlet->groupBounds.sphereCenter.x, InMyMeshlet->groupBounds.sphereCenter.y, InMyMeshlet->groupBounds.sphereCenter.z);
 		DirectX::XMVECTOR tempVec = DirectX::XMLoadFloat3(&ownCenter);
 		tempVec = DirectX::XMVector3Transform(tempVec, mtxLocalToView);

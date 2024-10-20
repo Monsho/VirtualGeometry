@@ -235,7 +235,7 @@ void BuildMeshletsByMeshopt(const std::vector<uint32>& InIndices, const std::vec
         myMeshlet.groupBounds = myMeshlet.bounds;
         myMeshlet.id = CurrMeshletID++;
         myMeshlet.lod = lod;
-        myMeshlet.meshletError = 0.0f;
+        myMeshlet.groupError = 0.0f;
         myMeshlet.parentError = std::numeric_limits<float>::infinity();
 
         for (uint32 v = 0; v < moMeshlet.vertex_count; v++)
@@ -380,7 +380,7 @@ void BuildMeshletsByMETIS(const std::vector<uint32>& InIndices, const std::vecto
         meshlet.groupBounds = meshlet.bounds;
         meshlet.id = CurrMeshletID++;
         meshlet.lod = lod;
-        meshlet.meshletError = 0.0f;
+        meshlet.groupError = 0.0f;
         meshlet.parentError = std::numeric_limits<float>::infinity();
     }
 }
@@ -601,7 +601,7 @@ void ProcessModel(std::unique_ptr<MyModel>& myModel)
                 for (auto&& child : group)
                 {
                     auto&& instance = mesh.meshletMap[child.id];
-                    maxChildrenError = std::max(maxChildrenError, instance.meshletError);
+                    maxChildrenError = std::max(maxChildrenError, instance.groupError);
                 }
                 float groupError = resultError + maxChildrenError;
 
@@ -612,7 +612,7 @@ void ProcessModel(std::unique_ptr<MyModel>& myModel)
                 // build DAG.
                 for (auto&& parent : simplifyMeshlets)
                 {
-                    parent.meshletError = groupError;
+                    parent.groupError = groupError;
                     parent.groupBounds = groupBounds;
                     for (auto&& child : group)
                     {

@@ -46,7 +46,7 @@ struct MyMeshlet
     std::vector<uint32> parents;
 
     // error.
-    float meshletError = 0.0f;
+    float groupError = 0.0f;
     float parentError = std::numeric_limits<float>::infinity();
 };
 
