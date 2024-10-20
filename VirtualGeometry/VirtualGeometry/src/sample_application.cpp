@@ -570,11 +570,11 @@ void SampleApplication::EnumerateVisibleMeshlets(const MyMesh* InMyMesh, const D
 	DirectX::XMStoreFloat3(&fs3, scale);
 	float maxScale = std::max(fs3.x, std::max(fs3.y, fs3.z));
 
-	auto ErrorProjection = [&](const DirectX::XMFLOAT3& center, float radius)
+	auto ErrorProjection = [&](const DirectX::XMFLOAT3& center, float error)
 	{
 		float yScale = 1.0f / tanf(InFovYRad * 0.5f);
 		float d2 = (center.x * center.x) + (center.y * center.y) + (center.z * center.z);
-		return InScreenHeight * 0.5f * yScale * radius / (d2 - radius * radius);
+		return InScreenHeight * 0.5f * yScale * error / (d2 - error * error);
 		//return InScreenHeight * 0.5f * yScale * radius / sqrtf(d2 - radius * radius);
 	};
 	auto IsMeshletVisible = [&](const MyMeshlet* InMyMeshlet)
@@ -625,26 +625,40 @@ void SampleApplication::EnumerateVisibleMeshlets(const MyMesh* InMyMesh, const D
 	}
 	else
 	{
-		while (!queue.empty())
+		struct SelectionWork
 		{
-			std::mutex mutexMeshlet, mutexQueue;
-			std::vector<uint32> nextQueue;
-			std::for_each(std::execution::par, queue.begin(), queue.end(), [&](uint32 meshletID)
+			std::vector<sl12::u32> inIDs;
+			std::vector<sl12::u32> outIDs;
+		};
+		static const sl12::u32 kCountPerThreads = 64;
+		sl12::u32 numThreads = (sl12::u32)((InMyMesh->meshletMap.size() + kCountPerThreads - 1) / kCountPerThreads);
+		std::vector<SelectionWork> workData;
+		workData.resize(numThreads);
+		for (sl12::u32 t = 0; t < numThreads; t++)
+		{
+			for (sl12::u32 i = 0; i < kCountPerThreads; i++)
 			{
-				auto&& myMeshlet = InMyMesh->meshletMap.find(meshletID)->second;
+				if (t * kCountPerThreads + i >= InMyMesh->meshletMap.size())
+					break;
+				workData[t].inIDs.push_back(t * kCountPerThreads + i);
+			}
+			workData[t].outIDs.clear();
+		}
+		std::for_each(std::execution::par, workData.begin(), workData.end(), [&](SelectionWork& work)
+		{
+			for (sl12::u32 id : work.inIDs)
+			{
+				auto&& myMeshlet = InMyMesh->meshletMap.find(id)->second;
 				bool isVisible = IsMeshletVisible(&myMeshlet);
 				if (isVisible)
 				{
-					std::lock_guard<std::mutex> lock(mutexMeshlet);
-					OutMeshletIDs.insert(meshletID);
+					work.outIDs.push_back(id);
 				}
-				else
-				{
-					std::lock_guard<std::mutex> lock(mutexQueue);
-					nextQueue.insert(nextQueue.end(), myMeshlet.traverseChildren.begin(), myMeshlet.traverseChildren.end());
-				}
-			});
-			queue = nextQueue;
+			}
+		});
+		for (auto&& work : workData)
+		{
+			OutMeshletIDs.insert(work.outIDs.begin(), work.outIDs.end());
 		}
 	}
 	traverseTime_ = sl12::CpuTimer::CurrentTime() - start;
