@@ -39,43 +39,6 @@ void ClearCountCS()
 }
 
 [Shader("node")]
-[NodeLaunch("broadcasting")]
-[NodeDispatchGrid(1, 1, 1)]
-[NumThreads(1, 1, 1)]
-void RootNode(
-	uint gid : SV_GroupID,
-	uint gtid : SV_GroupThreadID,
-	uint dtid : SV_DispatchThreadID,
-	DispatchNodeInputRecord<RootNodeRecord> inputRecord,
-	[MaxRecords(8)] NodeOutput<RecursiveRecord> RecursiveNode)
-{
-	RootNodeRecord inRec = inputRecord.Get();
-	uint meshletID = inRec.RootMeshletID;
-	MeshletData meshlet = rMeshletData[meshletID];
-	bool isVisible = IsMeshletVisible(meshlet);
-
-	if (isVisible)
-	{
-		uint ov;
-		rwCountBuffer.InterlockedAdd(0, 1, ov);
-		uint baseAddr = ov * 4 * 6;
-		uint4 arg0 = uint4(meshletID, meshlet.indexCount, 1, meshlet.indexOffset);
-		uint2 arg1 = uint2(0, 0);
-		rwDrawArgs.Store4(baseAddr, arg0);
-		rwDrawArgs.Store2(baseAddr + 16, arg1);
-	}
-	else
-	{
-		ThreadNodeOutputRecords<RecursiveRecord> outRecs = RecursiveNode.GetThreadNodeOutputRecords(meshlet.childCount);
-		for (uint i = 0; i < meshlet.childCount; i++)
-		{
-			outRecs[i].meshletID = meshlet.children[i];
-		}
-		outRecs.OutputComplete();
-	}
-}
-
-[Shader("node")]
 [NodeLaunch("thread")]
 [NodeMaxRecursionDepth(16)]
 void RecursiveNode(
@@ -104,5 +67,29 @@ void RecursiveNode(
 			outRecs[i].meshletID = meshlet.children[i];
 		}
 		outRecs.OutputComplete();
+	}
+}
+
+[NumThreads(32, 1, 1)]
+void ParallelSelectionCS(uint did : SV_DispatchThreadID)
+{
+	uint meshletID = did;
+	if (meshletID >= cbTraverse.numMeshlets)
+	{
+		return;
+	}
+	
+	MeshletData meshlet = rMeshletData[meshletID];
+	bool isVisible = IsMeshletVisible(meshlet);
+
+	if (isVisible)
+	{
+		uint ov;
+		rwCountBuffer.InterlockedAdd(0, 1, ov);
+		uint baseAddr = ov * 4 * 6;
+		uint4 arg0 = uint4(meshletID, meshlet.indexCount, 1, meshlet.indexOffset);
+		uint2 arg1 = uint2(0, 0);
+		rwDrawArgs.Store4(baseAddr, arg0);
+		rwDrawArgs.Store2(baseAddr + 16, arg1);
 	}
 }

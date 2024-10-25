@@ -142,6 +142,7 @@ private:
 	UniqueHandle<sl12::GraphicsPipelineState>	psoTonemap_;
 	UniqueHandle<sl12::ComputePipelineState>	psoLighting_;
 	UniqueHandle<sl12::ComputePipelineState>	psoClearCount_;
+	UniqueHandle<sl12::ComputePipelineState>	psoParallelSelection_;
 
 	UniqueHandle<sl12::Buffer>				myPositionBuffer_;
 	UniqueHandle<sl12::Buffer>				myNormalBuffer_;
@@ -173,6 +174,7 @@ private:
 	sl12::ShaderHandle		hTonemapP_;
 	sl12::ShaderHandle		hClearCountC_;
 	sl12::ShaderHandle		hTraverseLib_;
+	sl12::ShaderHandle		hParallelSelectionC_;
 
 	std::unique_ptr<MyModel>	myModel_;
 	

@@ -39,6 +39,7 @@ struct TraverseCB
     float       screenYScale;   // ScreenHeight * 0.5 / tan(fovY * 0.5)
     float       maxScale;
     float       errorThreshold;
+    uint        numMeshlets;
 };
 
 struct MeshletData
@@ -51,11 +52,6 @@ struct MeshletData
     uint        childCount;
     uint        indexCount;
     uint        indexOffset;
-};
-
-struct RootNodeRecord
-{
-    uint	RootMeshletID;
 };
 
 struct RecursiveRecord

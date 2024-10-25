@@ -124,6 +124,9 @@ bool SampleApplication::Initialize()
 	hTraverseLib_ = shaderMan_->CompileFromFile(
 		sl12::JoinPath(shaderBaseDir, "traverse_tree.lib.hlsl"),
 		"main", sl12::ShaderType::Library, 6, 8, nullptr, &shaderDefines);
+	hParallelSelectionC_ = shaderMan_->CompileFromFile(
+		sl12::JoinPath(shaderBaseDir, "traverse_tree.lib.hlsl"),
+		"ParallelSelectionCS", sl12::ShaderType::Compute, 6, 8, nullptr, &shaderDefines);
 
 	// load glb and mesh_grouping.
 	std::string glbPath = sl12::JoinPath(sl12::JoinPath(homeDir_, kResourceDir), "bunny.glb");
@@ -440,6 +443,7 @@ bool SampleApplication::Initialize()
 	rsLightingDR_ = sl12::MakeUnique<sl12::RootSignature>(&device_);
 	psoLighting_ = sl12::MakeUnique<sl12::ComputePipelineState>(&device_);
 	psoClearCount_ = sl12::MakeUnique<sl12::ComputePipelineState>(&device_);
+	psoParallelSelection_ = sl12::MakeUnique<sl12::ComputePipelineState>(&device_);
 	rsCs_->Initialize(&device_, hLightingC_.GetShader());
 	{
 		sl12::ComputePipelineStateDesc desc{};
@@ -463,13 +467,24 @@ bool SampleApplication::Initialize()
 			return false;
 		}
 	}
+	{
+		sl12::ComputePipelineStateDesc desc{};
+		desc.pCS = hParallelSelectionC_.GetShader();
+		desc.pRootSignature = &rsCs_;
+
+		if (!psoParallelSelection_->Initialize(&device_, desc))
+		{
+			sl12::ConsolePrint("Error: failed to init clear count pso.");
+			return false;
+		}
+	}
 
 	// work graph context.
 	traverseWGState_ = sl12::MakeUnique<sl12::WorkGraphState>(&device_);
 	traverseWGContext_ = sl12::MakeUnique<sl12::WorkGraphContext>(&device_);
 	{
 		static LPCWSTR kProgramName = L"TraverseWG";
-		static LPCWSTR kEntryPoint = L"RootNode";
+		static LPCWSTR kEntryPoint = L"RecursiveNode";
 
 		D3D12_NODE_ID entryPoint{};
 		entryPoint.Name = kEntryPoint;
@@ -687,9 +702,10 @@ bool SampleApplication::Execute()
 			static const char* kTraverseTypes[] = {
 				"CPU Linear",
 				"CPU Parallel",
-				"GPU Work Graph"
+				"GPU Work Graph",
+				"GPU Compute"
 			};
-			ImGui::Combo("Traverse Type", &traverseType_, kTraverseTypes, 3);
+			ImGui::Combo("Traverse Type", &traverseType_, kTraverseTypes, 4);
 			ImGui::Checkbox("Print Error", &bPrintError_);
 			ImGui::SliderFloat("Error Threshold", &errorThreshold_, 0.001f, 1.0f);
 			ImGui::Text("Traverse Time : %.3f (ms)", traverseTime_.ToMicroSecond() / 1000.0f);
@@ -795,7 +811,7 @@ bool SampleApplication::Execute()
 	}
 
 	std::set<uint32> visibleIDs;
-	bool isTraverseGPU = traverseType_ == 2;
+	bool isTraverseGPU = traverseType_ >= 2;
 	if (bRenderLOD_)
 	{
 		DirectX::XMMATRIX mtxWorldToView = DirectX::XMLoadFloat4x4(&cbScene.mtxWorldToView);
@@ -820,6 +836,7 @@ bool SampleApplication::Execute()
 			DirectX::XMStoreFloat4x4(&cbTraverse.mtxLocalToView, mtxLocalToView);
 
 			cbTraverse.errorThreshold = errorThreshold_;
+			cbTraverse.numMeshlets = (UINT)myModel_->meshes[0].meshletMap.size();
 
 			hTraverseCB = cbvMan_->GetTemporal(&cbTraverse, sizeof(cbTraverse));
 		}
@@ -833,15 +850,21 @@ bool SampleApplication::Execute()
 		pCmdList->GetLatestCommandList()->ClearRenderTargetView(swapchain.GetCurrentRenderTargetView(kSwapchainBufferOffset)->GetDescInfo().cpuHandle, color, 0, nullptr);
 	}
 
-	// execute work graph.
+	// execute gpu traverse.
 	if (isTraverseGPU)
 	{
+		GPU_MARKER(pCmdList, 0, "LOD Selection");
+		
+		bool useWorkGraph = traverseType_ == 2;
+		
 		pCmdList->AddTransitionBarrier(&countBuffer_, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		pCmdList->AddTransitionBarrier(&drawArgBuffer_, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		pCmdList->FlushBarriers();
 
 		// clear count buffer.
 		{
+			GPU_MARKER(pCmdList, 1, "ClearCount");
+			
 			// set pipeline.
 			pCmdList->GetLatestCommandList()->SetPipelineState(psoClearCount_->GetPSO());
 
@@ -856,8 +879,13 @@ bool SampleApplication::Execute()
 			// dispatch.
 			pCmdList->GetLatestCommandList()->Dispatch(1, 1, 1);
 		}
-		// execute work graph.
+
+		// gpu selection.
+		if (useWorkGraph)
 		{
+			// execute work graph.
+			GPU_MARKER(pCmdList, 1, "Selection (WorkGraph)");
+			
 			// set program.
 			traverseWGContext_->SetProgram(pCmdList, D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE);
 
@@ -872,10 +900,32 @@ bool SampleApplication::Execute()
 			pCmdList->SetComputeRootSignatureAndDescriptorSet(&rsCs_, &descSet);
 
 			// dispatch graph.
-			RootNodeRecord records[] = {
+			RecursiveRecord records[] = {
 				{myModel_->meshes[0].rootMeshletID},
 			};
-			traverseWGContext_->DispatchGraphCPU(pCmdList, 0, 1, sizeof(RootNodeRecord), records);
+			traverseWGContext_->DispatchGraphCPU(pCmdList, 0, 1, sizeof(RecursiveRecord), records);
+		}
+		else
+		{
+			// compute parallel selection.
+			GPU_MARKER(pCmdList, 1, "Selection (ComputeShader)");
+			
+			// set pipeline.
+			pCmdList->GetLatestCommandList()->SetPipelineState(psoParallelSelection_->GetPSO());
+
+			// set descriptors.
+			sl12::DescriptorSet descSet;
+			descSet.Reset();
+			descSet.SetCsCbv(0, hTraverseCB.GetCBV()->GetDescInfo().cpuHandle);
+			descSet.SetCsSrv(0, meshletBV_->GetDescInfo().cpuHandle);
+			descSet.SetCsUav(0, countUAV_->GetDescInfo().cpuHandle);
+			descSet.SetCsUav(1, drawArgUAV_->GetDescInfo().cpuHandle);
+
+			pCmdList->SetComputeRootSignatureAndDescriptorSet(&rsCs_, &descSet);
+
+			// dispatch.
+			UINT DX = (UINT)((myModel_->meshes[0].meshletMap.size() + 31) / 32);
+			pCmdList->GetLatestCommandList()->Dispatch(DX, 1, 1);
 		}
 
 		pCmdList->AddTransitionBarrier(&countBuffer_, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
@@ -886,6 +936,8 @@ bool SampleApplication::Execute()
 	// gbuffer pass.
 	renderGraph_->NextPass(pCmdList);
 	{
+		GPU_MARKER(pCmdList, 0, "GBufferPass");
+
 		// output barrier.
 		renderGraph_->BarrierOutputsAll(pCmdList);
 
@@ -1014,6 +1066,8 @@ bool SampleApplication::Execute()
 	// lighing pass.
 	renderGraph_->NextPass(pCmdList);
 	{
+		GPU_MARKER(pCmdList, 0, "LightingPass");
+
 		// output barrier.
 		renderGraph_->BarrierOutputsAll(pCmdList);
 
@@ -1042,6 +1096,8 @@ bool SampleApplication::Execute()
 	// tonemap pass.
 	renderGraph_->NextPass(pCmdList);
 	{
+		GPU_MARKER(pCmdList, 0, "TonemapPass");
+
 		// output barrier.
 		renderGraph_->BarrierOutputsAll(pCmdList);
 
